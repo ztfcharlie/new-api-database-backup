@@ -1,0 +1,6 @@
+# 默认行为：自动处理 (Windows上检出CRLF, 提交LF)
+* text=auto
+
+# 强制 .sh 脚本必须使用 LF 换行符 (Linux标准)
+# 即使在 Windows 上 checkout，也保持 LF
+*.sh text eol=lf
