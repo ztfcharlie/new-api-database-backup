@@ -53,7 +53,7 @@ graph LR
 1.  **修改 MySQL 配置** (`my.cnf` 或 `docker-compose` 挂载配置)：
     ```ini
     [mysqld]
-    # 唯一ID (每个项目必须不同，如 1, 2, 3...)
+    # 唯一ID (只要不和备份库的 100 冲突即可，通常设为 1)
     server-id = 1
     # 开启 Binlog
     log-bin = mysql-bin

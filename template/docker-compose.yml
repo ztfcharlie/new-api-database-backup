@@ -38,6 +38,9 @@ services:
     restart: always
     depends_on:
       - tunnel
+    # ⚡️ 强制设置备份库 ID 为 100
+    # 这样你的生产库(Master)可以统一配置为 1，只要两者不一样即可。
+    command: --default-authentication-plugin=mysql_native_password --server-id=100
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       # 关键点：这里连接的是 tunnel 服务的容器名
