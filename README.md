@@ -23,11 +23,11 @@
 
 ```mermaid
 graph LR
-    subgraph Production_Server [生产服务器 (Master)]
+    subgraph Production_Server ["生产服务器 (Master)"]
         A[MySQL Master] -- 127.0.0.1:3306 --> B(SSHD Service)
     end
 
-    subgraph Backup_Server [备份服务器 (Slave)]
+    subgraph Backup_Server ["备份服务器 (Slave)"]
         C(Docker Tunnel) -- SSH Connection --> B
         D[Docker MySQL Slave] -- Link --> C
         E[phpMyAdmin] -- Link --> D
