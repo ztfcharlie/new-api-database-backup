@@ -108,7 +108,7 @@ MASTER_PASSWORD=xxxxxx
 
 # === 本地端口规划 (避免冲突) ===
 LOCAL_PORT=13306          # 本机访问备份库的端口
-PMA_PORT=8888             # phpMyAdmin 访问端口
+PMA_WEB_PORT=8888         # phpMyAdmin 访问端口
 ```
 
 #### 3. 放入 SSH 私钥 (推荐)
@@ -124,22 +124,27 @@ docker-compose up -d
 
 ## 📊 验证与管理
 
-### 访问数据库
-*   **地址**: `localhost` (或备份服务器IP)
-*   **端口**: `.env` 中配置的 `LOCAL_PORT` (如 13306)
-
-### 访问 phpMyAdmin
-*   打开浏览器访问: `http://localhost:8888` (对应 `PMA_PORT`)
-*   登录查看数据同步情况。
-
-### 检查同步状态
-进入 phpMyAdmin 或命令行执行：
-```sql
+### 1. 访问数据库 (命令行)
+进入容器检查同步状态：
+```bash
+docker exec -it backup_project_a mysql -u root -p
+# 输入密码后执行:
 SHOW SLAVE STATUS\G;
 ```
-如果看到以下两行，代表同步正常运行：
-*   `Slave_IO_Running: Yes`
-*   `Slave_SQL_Running: Yes`
+
+### 2. 访问 phpMyAdmin (🔐 安全隧道模式)
+为了极致安全，phpMyAdmin **不在备份服务器对外开放**。管理员需通过 SSH 隧道在本地访问。
+
+**在你的电脑上 (管理员 PC) 执行：**
+```bash
+# 格式: ssh -L [本地端口]:127.0.0.1:[备份服务器PMA端口] [备份服务器用户]@[备份服务器IP]
+ssh -L 8888:127.0.0.1:8888 root@1.2.3.4
+```
+
+**然后在本地浏览器访问：**
+*   http://localhost:8888
+
+*(原理：你访问自己电脑的 8888，流量被 SSH 秘密传送到备份服务器内部的 8888，最终到达 phpMyAdmin 容器)*
 
 ---
 
@@ -155,7 +160,7 @@ A: 请检查：
 3. SSH 私钥权限是否正确。
 
 **Q: 多个项目如何管理？**
-A: 简单的复制 `template` 目录为不同名称（如 `backup_shop`, `backup_blog`），修改 `.env` 中的端口号（`LOCAL_PORT`, `PMA_PORT`），互不冲突。
+A: 简单的复制 `template` 目录为不同名称（如 `backup_shop`, `backup_blog`），修改 `.env` 中的端口号（`LOCAL_PORT`, `PMA_WEB_PORT`），互不冲突。
 
 ---
 
