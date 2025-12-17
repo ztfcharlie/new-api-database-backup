@@ -3,7 +3,6 @@ version: '3.3'
 networks:
   # 使用变量定义网络名，确保多项目隔离
   default_net:
-    name: net_${PROJECT_NAME}
     driver: bridge
 
 services:
