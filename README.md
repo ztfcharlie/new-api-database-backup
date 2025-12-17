@@ -148,6 +148,66 @@ ssh -L 8888:127.0.0.1:8888 root@1.2.3.4
 
 ---
 
+## 🗂️ 进阶：手动导入导出 (大数据量首选)
+
+如果数据库体积较大（>2GB），网络直接同步极其缓慢且不稳定。建议采用 **"Docker 导出 -> 传输 -> Docker 导入"** 的方式完成初始同步。
+
+### 1. 生产端导出 (Export)
+登录 **生产服务器**，执行以下命令导出数据快照：
+
+```bash
+# 导出并压缩 (请替换 [容器名], [密码], [库名])
+# --master-data=2 能够自动记录当前的同步坐标，对主从至关重要
+docker exec [生产容器名] mysqldump -u root -p[生产密码] \
+  --single-transaction \
+  --master-data=2 \
+  --triggers --routines --events \
+  --databases [需要备份的库名] \
+  | gzip > initial_snapshot.sql.gz
+```
+
+### 2. 备份端导入 (Import)
+将 `initial_snapshot.sql.gz` 传输到 **备份服务器** 项目根目录，然后执行：
+
+```bash
+# 流式解压并导入 (无需手动解压，节省空间)
+# 1. 临时关闭同步 (防止写入冲突)
+docker exec -i [备份容器名] mysql -u root -p[本地密码] -e "STOP SLAVE; SET GLOBAL sql_log_bin=0;"
+
+# 2. 导入数据
+zcat initial_snapshot.sql.gz | docker exec -i [备份容器名] mysql -u root -p[本地密码]
+
+# 3. 恢复同步
+# 数据导入包含坐标信息，START SLAVE 会自动从快照时刻继续同步
+docker exec -i [备份容器名] mysql -u root -p[本地密码] -e "SET GLOBAL sql_log_bin=1; START SLAVE; SHOW SLAVE STATUS\G;"
+```
+
+---
+
+## 🆘 灾难恢复 (Disaster Recovery)
+
+当生产环境发生故障需要回滚数据时，利用本项目的架构优势，你可以直接通过安全隧道将备份数据“推”回生产库，无需手动拷贝文件。
+
+### 🚀 极速管道恢复
+无需落地文件，直接通过 Docker 内部网络和 SSH 隧道，将备份库的数据流式传输回生产库。
+
+```bash
+# ⚠️ 高危操作：这将覆盖生产库数据！请再次确认！
+# 必须先确保生产库的对应数据库已清空或允许覆盖。
+
+# 在备份服务器执行：
+docker exec [备份容器名] bash -c "mysqldump -u root -p[本地密码] --databases [目标库名] \
+  | mysql -h tunnel -P 3306 -u [生产用户] -p[生产密码]"
+```
+
+**原理说明：**
+*   `mysqldump`：读取本地备份容器的数据。
+*   `|` (管道)：将数据流直接传递给下一个命令。
+*   `mysql -h tunnel`：连接到 `tunnel` 容器（即连接到了生产服务器）。
+*   整个过程数据流不落地，速度取决于网络带宽，且全程经过 SSH 加密。
+
+---
+
 ## ❓ 常见问题 (Q&A)
 
 **Q: 生产数据量已经很大(如 100GB)，可以直接启动吗？**

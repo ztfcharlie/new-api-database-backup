@@ -49,6 +49,7 @@ services:
       - --enforce-gtid-consistency=ON
       - --read-only=1              # <--- 建议开启，防止误写
       - --log-slave-updates=ON     # 如果需要级联复制，建议加上此项
+      - --replicate-do-db=${TARGET_DB_NAME} # <--- 只备份指定的数据库
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       # 关键点：这里连接的是 tunnel 服务的容器名
