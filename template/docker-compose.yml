@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # === 服务1: SSH 隧道 (负责打洞) ===
   tunnel:
