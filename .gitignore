@@ -33,3 +33,6 @@ tmp/
 .idea/
 .vscode/
 *.sublime-project
+
+
+document.md
