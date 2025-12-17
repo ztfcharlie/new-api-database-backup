@@ -20,8 +20,8 @@ services:
       SSH_PASSWORD: ${SSH_PASSWORD}
       REMOTE_DB_PORT: ${REMOTE_DB_PORT}
     volumes:
-      # 🔑 共享密钥: 挂载项目根目录下的 id_rsa (所有项目共用一把钥匙)
-      - ../id_rsa:/root/.ssh/id_rsa
+      # 🔑 共享密钥: 挂载指定路径的私钥文件
+      - ../id_rsa/id_rsa_backup:/root/.ssh/id_rsa
     command: >
       sh -c "
       apk add --no-cache openssh-client sshpass &&
