@@ -49,16 +49,21 @@ services:
       - tunnel
     # ⚡️ 强制设置备份库 ID 为 100
     # 这样你的生产库(Master)可以统一配置为 1，只要两者不一样即可。
-    command: 
-      - --default-authentication-plugin=mysql_native_password 
-      - --server-id=100             # <--- 必须与主库不同
-      - --log-bin=mysql-bin        # 开启，用于记录从库自己的操作
-      - --binlog-format=ROW
-      - --gtid-mode=ON             # 必须开启，与主库对齐
-      - --enforce-gtid-consistency=ON
-      - --read-only=1              # <--- 建议开启，防止误写
-      - --log-slave-updates=ON     # 如果需要级联复制，建议加上此项
-      - --replicate-do-db=${TARGET_DB_NAME} # <--- 只备份指定的数据库
+    # 修改启动命令: 强行在后台启动守护脚本，然后启动 MySQL
+    command: >
+      bash -c "
+      nohup bash /docker-entrypoint-initdb.d/init-slave.sh > /var/log/slave_monitor.log 2>&1 &
+      docker-entrypoint.sh mysqld 
+      --default-authentication-plugin=mysql_native_password 
+      --server-id=100 
+      --log-bin=mysql-bin 
+      --binlog-format=ROW 
+      --gtid-mode=ON 
+      --enforce-gtid-consistency=ON 
+      --read-only=1 
+      --log-slave-updates=ON 
+      --replicate-do-db=${TARGET_DB_NAME}
+      "
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       # 关键点：这里连接的是 tunnel 服务的容器名
