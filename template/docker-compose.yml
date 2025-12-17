@@ -71,8 +71,6 @@ services:
       MASTER_PORT: 3306
       MASTER_USER: ${MASTER_USER}
       MASTER_PASSWORD: ${MASTER_PASSWORD}
-    ports:
-      - "${LOCAL_PORT}:3306"
     volumes:
       - ./data:/var/lib/mysql
       - ./init-slave.sh:/docker-entrypoint-initdb.d/init-slave.sh

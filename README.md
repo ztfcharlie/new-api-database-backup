@@ -107,7 +107,6 @@ MASTER_USER=repl_user     # 刚才创建的复制账号
 MASTER_PASSWORD=xxxxxx
 
 # === 本地端口规划 (避免冲突) ===
-LOCAL_PORT=13306          # 本机访问备份库的端口
 PMA_WEB_PORT=8888         # phpMyAdmin 访问端口
 ```
 
@@ -220,7 +219,7 @@ A: 请检查：
 3. SSH 私钥权限是否正确。
 
 **Q: 多个项目如何管理？**
-A: 简单的复制 `template` 目录为不同名称（如 `backup_shop`, `backup_blog`），修改 `.env` 中的端口号（`LOCAL_PORT`, `PMA_WEB_PORT`），互不冲突。
+A: 简单的复制 `template` 目录为不同名称（如 `backup_shop`, `backup_blog`），修改 `.env` 中的端口号（`PMA_WEB_PORT`），互不冲突。
 
 ---
 
