@@ -7,7 +7,7 @@
 
 # --- 配置区域 ---
 # XtraBackup 镜像版本 (必须与备份时一致)
-XB_IMAGE="percona/percona-xtrabackup:latest"
+XB_IMAGE="percona/percona-xtrabackup:8.0"
 # ----------------
 
 # 检查参数
