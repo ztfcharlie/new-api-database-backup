@@ -2,14 +2,14 @@
 
 # ==============================================================================
 # MySQL 物理备份脚本 (Percona XtraBackup) - Docker 版
-# 功能：对指定的 MySQL 容器进行物理热备，并打包成 tar.gz
+# 功能：对指定的 MySQL 容器进行物理热备，并打包成压缩包
 # 适用：生产环境 (Linux)
 # ==============================================================================
 
 # --- 配置区域 ---
 # 备份文件存放目录 (默认为当前目录下的 backups)
 BACKUP_ROOT="./backups"
-# XtraBackup 镜像版本 (MySQL 8.0 请用 8.0, MySQL 5.7 请用 2.4)
+# XtraBackup 镜像版本 (这里用 8.0 即可，配合 --no-server-version-check 使用)
 XB_IMAGE="percona/percona-xtrabackup:8.0"
 # ----------------
 
@@ -38,7 +38,8 @@ fi
 # 创建备份目录
 mkdir -p "$BACKUP_ROOT"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-FILENAME="${CONTAINER_NAME}_full_${TIMESTAMP}.tar.gz"
+# 注意：虽然是 xbstream 格式，但为了方便识别，我们依然打包成 .gz
+FILENAME="${CONTAINER_NAME}_full_${TIMESTAMP}.xbstream.gz"
 TARGET_FILE="${BACKUP_ROOT}/${FILENAME}"
 
 echo "--------------------------------------------------------"
@@ -49,11 +50,9 @@ echo "工具镜像: $XB_IMAGE"
 echo "--------------------------------------------------------"
 
 # 执行备份
-# 原理解释：
-# --volumes-from: 借用目标容器的数据卷，让 XtraBackup 能直接读取磁盘文件
-# --network container: 加入目标容器的网络，以便通过 127.0.0.1 连接数据库进行锁处理
-# --stream=tar: 将备份数据以流的方式输出，不存中间文件
-# gzip: 直接压缩流
+# 关键修改：
+# 1. --no-server-version-check: 强制忽略 MySQL 8.2 版本不匹配报错
+# 2. --stream=xbstream: 8.0 版本必须用 xbstream，不能用 tar
 docker run --rm \
   --volumes-from "$CONTAINER_NAME" \
   --network "container:$CONTAINER_NAME" \
@@ -76,15 +75,12 @@ if [ $? -eq 0 ]; then
   echo "文件位置: $TARGET_FILE"
   echo "文件大小: $FILESIZE"
   echo ""
-  echo "⚠️  注意: 这是一个'流式'备份包。"
-  echo "恢复步骤:"
-  echo "1. 解压: tar -xizf $FILENAME -C ./restore_dir"
-  echo "2. 准备: xtrabackup --prepare --target-dir=./restore_dir"
+  echo "⚠️  注意: 这是一个 xbstream 流式压缩包。"
+  echo "恢复时请务必使用配套的 restore_slave.sh 脚本。"
   echo "--------------------------------------------------------"
 else
   echo "--------------------------------------------------------"
   echo "❌ 备份失败，请检查上面的错误日志。"
-  echo "常见原因: 密码错误、MySQL版本不匹配、容器网络问题。"
   echo "--------------------------------------------------------"
   rm -f "$TARGET_FILE" # 删除可能损坏的文件
   exit 1
