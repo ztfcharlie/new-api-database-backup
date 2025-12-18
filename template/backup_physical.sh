@@ -10,7 +10,7 @@
 # 备份文件存放目录 (默认为当前目录下的 backups)
 BACKUP_ROOT="./backups"
 # XtraBackup 镜像版本 (MySQL 8.0 请用 8.0, MySQL 5.7 请用 2.4)
-XB_IMAGE="percona/percona-xtrabackup:8.0"
+XB_IMAGE="percona/percona-xtrabackup:latest"
 # ----------------
 
 # 检查参数
