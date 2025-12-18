@@ -10,7 +10,7 @@
 # 备份文件存放目录 (默认为当前目录下的 backups)
 BACKUP_ROOT="./backups"
 # XtraBackup 镜像版本 (这里用 8.0 即可，配合 --no-server-version-check 使用)
-XB_IMAGE="percona/percona-xtrabackup:8.3"
+XB_IMAGE="percona/percona-xtrabackup:8.0"
 # ----------------
 
 # 检查参数
