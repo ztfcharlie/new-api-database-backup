@@ -59,7 +59,7 @@ docker run --rm \
   --network "container:$CONTAINER_NAME" \
   "$XB_IMAGE" \
   xtrabackup --backup \
-    --stream=tar \
+    --stream=xbstream \
     --compress \
     --user=root \
     --password="$DB_PASSWORD" \

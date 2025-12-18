@@ -44,12 +44,19 @@ mkdir -p "$TARGET_DIR_ABS"
 # 清空目录 (慎用 rm -rf，这里只删目录下的内容)
 rm -rf "$TARGET_DIR_ABS"/*
 
-echo "[2/5] 正在解压备份包 (gzip + tar)..."
-# -x: 解压, -i: 忽略零块, -z: gzip, -f: 文件, -C: 目标目录
-tar -xizf "$BACKUP_FILE_ABS" -C "$TARGET_DIR_ABS"
+echo "[2/5] 正在解压备份包 (xbstream)..."
+# 流程: 宿主机 gunzip -> 管道 -> 容器 xbstream -x
+# 注意: 我们使用 zcat (或 gunzip -c) 将解压后的流传给 docker
+zcat "$BACKUP_FILE_ABS" | docker run --rm \
+  -i \
+  -v "$TARGET_DIR_ABS":/target \
+  "$XB_IMAGE" \
+  xbstream -x -C /target
 
+# 检查上一条命令的退出代码
+# 注意: 管道命令的返回值通常是最后一个命令的返回值，这里是 docker run
 if [ $? -ne 0 ]; then
-  echo "❌ 解压失败，请检查备份包是否完整。"
+  echo "❌ 解包失败，请检查备份包是否完整。"
   exit 1
 fi
 
