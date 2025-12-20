@@ -1,114 +1,111 @@
 #!/bin/bash
 
 # ==============================================================================
-# 🚀 快速初始化同步脚本 (适用于新主库/空主库)
-# 功能：自动连接生产库 -> 获取 File/Position -> 配置本地从库 -> 开启同步
-# 注意：仅在首次搭建时使用。如果主库已有大量数据，请使用 restore_slave.sh
+# 🚀 真正的一键全自动同步脚本 (Auto-Sync)
+# 功能：
+# 1. 自动检测本地是否为空库
+# 2. 如果为空，自动从主库(通过隧道)拉取全量数据 (mysqldump)
+# 3. 自动利用 Dump 包里的坐标开启主从同步
 # ==============================================================================
 
 # 1. 检查并加载环境变量
 if [ ! -f .env ]; then
   echo "❌ 错误: 当前目录下未找到 .env 文件。"
-  echo "请先复制模板: cp .env.example .env 并完成配置。"
   exit 1
 fi
-
-# 导出环境变量以便脚本使用
 export $(grep -v '^#' .env | xargs)
 
 # 检查必要的变量
-if [ -z "$PROJECT_NAME" ] || [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-  echo "❌ 错误: .env 文件配置不完整 (缺少 PROJECT_NAME 或 MYSQL_ROOT_PASSWORD)"
+if [ -z "$PROJECT_NAME" ] || [ -z "$MYSQL_ROOT_PASSWORD" ] || [ -z "$TARGET_DB_NAME" ]; then
+  echo "❌ 错误: .env 配置不完整 (缺少 PROJECT_NAME / ROOT密码 / 目标库名)"
   exit 1
 fi
 
 CONTAINER_DB="backup_${PROJECT_NAME}"
-CONTAINER_TUNNEL="tunnel_${PROJECT_NAME}"
 
 echo "--------------------------------------------------------"
-echo "🔄 MySQL 主从同步快速初始化向导"
+echo "🔄 MySQL 一键全自动同步向导"
 echo "--------------------------------------------------------"
-echo "项目名称: $PROJECT_NAME"
-echo "数据库容器: $CONTAINER_DB"
+echo "项目: $PROJECT_NAME"
+echo "目标库: $TARGET_DB_NAME"
+echo "容器: $CONTAINER_DB"
 echo "--------------------------------------------------------"
 
-# 2. 检查容器运行状态
+# 2. 检查容器
 if ! docker ps | grep -q "$CONTAINER_DB"; then
-  echo "❌ 错误: 数据库容器 '$CONTAINER_DB' 未运行。"
-  echo "请先执行: docker-compose up -d"
+  echo "❌ 错误: 数据库容器未运行。请先执行 docker-compose up -d"
   exit 1
 fi
 
-# 3. 获取生产库权限 (需要 Root 权限来执行 SHOW MASTER STATUS)
-echo "我们需要连接到生产数据库获取当前的 Binlog 坐标。"
-echo "请提供生产数据库的 ROOT 密码 (密码不会被保存):"
-read -s -p "生产库 Root 密码: " PROD_DB_PASSWORD
+# 3. 询问生产库密码
+echo "请输入生产库(Master)的 Root 密码，用于拉取初始数据:"
+read -s -p "密码: " PROD_DB_PASSWORD
 echo ""
 
-# 4. 尝试通过隧道连接生产库获取状态
-echo "📡 正在通过 SSH 隧道连接生产库..."
+# 4. 检测本地是否存在数据库
+echo "🔍 正在检查本地数据库状态..."
+DB_EXISTS=$(docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
 
-# 在 db 容器内执行 mysql 客户端连接 tunnel host
-# 使用 awk 提取 File 和 Position
-MASTER_STATUS=$(docker exec -i "$CONTAINER_DB" mysql -h tunnel -u root -p"$PROD_DB_PASSWORD" -e "SHOW MASTER STATUS\G" 2>/dev/null)
-
-if [ -z "$MASTER_STATUS" ]; then
-  echo "❌ 连接生产库失败！"
-  echo "可能原因:"
-  echo "1. 密码错误"
-  echo "2. SSH 隧道未建立 (检查 tunnel 容器日志)"
-  echo "3. 生产库未开启 Binlog (log-bin)"
-  exit 1
-fi
-
-LOG_FILE=$(echo "$MASTER_STATUS" | grep "File:" | awk '{print $2}')
-LOG_POS=$(echo "$MASTER_STATUS" | grep "Position:" | awk '{print $2}')
-
-if [ -z "$LOG_FILE" ] || [ -z "$LOG_POS" ]; then
-  echo "❌ 获取坐标失败。请检查主库是否开启了 Binlog。"
-  echo "调试信息:"
-  echo "$MASTER_STATUS"
-  exit 1
-fi
-
-echo "✅ 成功获取生产库坐标!"
-echo "📄 File: $LOG_FILE"
-echo "📍 Position: $LOG_POS"
-echo "--------------------------------------------------------"
-
-# 5. 配置本地从库
-echo "⚙️  正在配置本地从库..."
-
-# 拼接 SQL 语句
-# 注意: MASTER_HOST='tunnel' 是 Docker 内部网络的主机名
-SQL_CMD="STOP SLAVE;
-CHANGE MASTER TO 
-  MASTER_HOST='tunnel', 
-  MASTER_USER='$MASTER_USER', 
-  MASTER_PASSWORD='$MASTER_PASSWORD', 
-  MASTER_LOG_FILE='$LOG_FILE', 
-  MASTER_LOG_POS=$LOG_POS;
-START SLAVE;
-SHOW SLAVE STATUS\G"
-
-# 执行 SQL
-SLAVE_STATUS=$(docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "$SQL_CMD" 2>/dev/null)
-
-# 6. 验证结果
-IO_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_IO_Running:" | awk '{print $2}')
-SQL_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_SQL_Running:" | awk '{print $2}')
-
-echo "--------------------------------------------------------"
-if [ "$IO_RUNNING" == "Yes" ] && [ "$SQL_RUNNING" == "Yes" ]; then
-  echo "🎉 同步启动成功！"
-  echo "Slave_IO_Running: $IO_RUNNING"
-  echo "Slave_SQL_Running: $SQL_RUNNING"
-  echo "提示: 初始数据将从现在开始实时同步。"
+if [[ "$DB_EXISTS" == *"$TARGET_DB_NAME"* ]]; then
+  echo "⚠️  警告: 本地已经存在 '$TARGET_DB_NAME' 数据库。"
+  echo "跳过数据拉取，仅尝试修复同步连接..."
+  # 这里可以加个分支逻辑，但为了安全，先不覆盖现有数据
 else
-  echo "⚠️  同步启动可能遇到问题，请检查状态："
-  echo "Slave_IO_Running: $IO_RUNNING"
-  echo "Slave_SQL_Running: $SQL_RUNNING"
-  echo "详细错误信息:"
-  echo "$SLAVE_STATUS" | grep "Last_.*_Error"
+  echo "✅ 本地为空，准备开始【全量拉取 + 同步】..."
+  
+  # === 核心逻辑: 管道传输 ===
+  # 步骤: 停止同步 -> 清空残留 -> 管道传输(mysqldump -> mysql) -> 自动恢复
+  
+  echo "🚀 [1/3] 正在从主库拉取数据并导入 (这可能需要几分钟)..."
+  
+  # 构造复杂的管道命令
+  # 1. 远程导出: --master-data=1 (关键! 包含同步坐标), --single-transaction (不锁表)
+  # 2. 本地导入: 先把 Auto_Position 关了，避免 GTID 冲突
+  
+  docker exec -i "$CONTAINER_DB" sh -c "
+    export MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\"
+    
+    # 1. 先把环境清理干净
+    echo '>> 正在重置本地 Slave 状态...'
+    mysql -u root -e 'STOP SLAVE; RESET MASTER; CHANGE MASTER TO MASTER_AUTO_POSITION = 0;'
+    
+    # 2. 开始管道传输
+    echo '>> 正在传输数据...'
+    # 注意: 这里在容器内调用 mysqldump 连接 tunnel
+    export PROD_PWD=\"$
+PROD_DB_PASSWORD\"
+    mysqldump -h tunnel -u root -p"$PROD_PWD" \
+      --databases $TARGET_DB_NAME \
+      --single-transaction \
+      --master-data=1 \
+      --set-gtid-purged=AUTO \
+      | mysql -u root
+      
+    # 3. 启动同步
+    echo '>> 数据导入完成，正在启动同步...'
+    mysql -u root -e 'START SLAVE;'
+  "
+  
+  if [ $? -eq 0 ]; then
+    echo "✅ 数据拉取及导入成功！"
+  else
+    echo "❌ 导入过程中出现错误，请检查密码或网络。"
+    exit 1
+  fi
+fi
+
+# 5. 验证结果
+echo "--------------------------------------------------------"
+echo "📊 正在检查同步状态..."
+STATUS=$(docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW SLAVE STATUS\G")
+IO_RUNNING=$(echo "$STATUS" | grep "Slave_IO_Running:" | awk '{print $2}')
+SQL_RUNNING=$(echo "$STATUS" | grep "Slave_SQL_Running:" | awk '{print $2}')
+
+if [ "$IO_RUNNING" == "Yes" ] && [ "$SQL_RUNNING" == "Yes" ]; then
+  echo "🎉 完美！同步已启动并且运行正常。"
+  echo "状态: IO=$IO_RUNNING / SQL=$SQL_RUNNING"
+else
+  echo "⚠️  同步启动后状态异常，请检查:"
+  echo "$STATUS" | grep "Last_.*_Error"
 fi
 echo "--------------------------------------------------------"
