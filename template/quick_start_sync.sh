@@ -1,16 +1,24 @@
 #!/bin/bash
 
 # ==============================================================================
-# 🚀 真正的一键全自动同步脚本 (Auto-Sync) v2.0
-# 修复: 增加杀掉后台守护进程的逻辑，防止争抢控制权
+# 🚀 真正的一键全自动同步脚本 (Auto-Sync) v2.1
+# 修复: 兼容性问题、进程查杀逻辑、去除冗余的 Start Slave 导致 1200 错误
 # ==============================================================================
+
+# 0. 强制使用 Bash (解决 sh read -s / [[ ]] 报错)
+if [ -z "$BASH_VERSION" ]; then
+    echo "⚠️  检测到当前 Shell 不是 Bash，正在切换到 Bash..."
+    exec bash "$0" "$@"
+fi
 
 # 1. 检查并加载环境变量
 if [ ! -f .env ]; then
   echo "❌ 错误: 当前目录下未找到 .env 文件。"
   exit 1
 fi
-export $(grep -v '^#' .env | xargs)
+set -a
+source .env
+set +a
 
 # 检查必要的变量
 if [ -z "$PROJECT_NAME" ] || [ -z "$MYSQL_ROOT_PASSWORD" ] || [ -z "$TARGET_DB_NAME" ]; then
@@ -21,7 +29,7 @@ fi
 CONTAINER_DB="backup_${PROJECT_NAME}"
 
 echo "--------------------------------------------------------"
-echo "🔄 MySQL 一键全自动同步向导 v2.0"
+echo "🔄 MySQL 一键全自动同步向导 v2.1"
 echo "--------------------------------------------------------"
 echo "项目: $PROJECT_NAME"
 echo "目标库: $TARGET_DB_NAME"
@@ -51,23 +59,25 @@ else
   
   # === 核心逻辑: 管道传输 ===
   
-  # 关键修复: 先杀掉容器内的守护进程 init-slave.sh
-  # 使用 || true 防止因为找不到进程而报错退出
+  # 关键修复: 使用 ps + awk 手动查找并杀掉 init-slave.sh，不依赖 pkill/killall
   echo "🔫 [1/4] 正在暂停后台守护进程..."
-  docker exec "$CONTAINER_DB" sh -c "pkill -f init-slave.sh || killall init-slave.sh || true"
+  docker exec "$CONTAINER_DB" sh -c "ps -ef | grep init-slave.sh | grep -v grep | awk '{print \$1}' | xargs -r kill" || true
   
   echo "⚙️  [2/4] 正在重置本地 Slave 状态..."
-  docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "STOP SLAVE; RESET MASTER; CHANGE MASTER TO MASTER_AUTO_POSITION = 0;"
+  # 注意: RESET SLAVE ALL 会清除所有 Master 信息，所以后续必须重新配置(由 init-slave.sh 完成)
+  docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "STOP SLAVE; RESET SLAVE ALL; RESET MASTER;"
   
   echo "🚀 [3/4] 正在传输数据 (这可能需要几分钟)..."
   # 使用 set -o pipefail 确保管道任意一环出错都能被捕获
-  # 注意：这里我们让 mysqldump 的 stderr 重定向到 stdout 或者 /dev/null 防止密码泄露，或者保留以便调试
   # 这里的 export PROD_PWD 是为了传递给内部的 sh
   docker exec -i "$CONTAINER_DB" sh -c "
     export MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\"
     export PROD_PWD=\"$PROD_DB_PASSWORD\"
     
     # 开始管道传输
+    # --master-data=1 (或 --source-data) 会在 Dump 中写入 'CHANGE MASTER TO ... log_file=..., log_pos=...'
+    # 但如果开了 GTID，它主要写入 GTID_PURGED。
+    # 关键点: 这里只负责导入数据和 GTID 位点，不负责建立连接。
     mysqldump -h tunnel -u root -p\"$PROD_PWD\" \
       --databases $TARGET_DB_NAME \
       --single-transaction \
@@ -80,13 +90,9 @@ else
   if [ $? -eq 0 ]; then
     echo "✅ 数据拉取及导入成功！"
     
-    echo "🔄 [4/4] 恢复同步并重启守护进程..."
-    # 切换回 GTID 模式并启动
-    docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "CHANGE MASTER TO MASTER_AUTO_POSITION = 1; START SLAVE;"
-    
-    # 重启容器以恢复 init-slave.sh 守护进程
-    # 注意: 重启容器比较慢，也可以选择在后台重新运行脚本，但重启容器最稳
-    echo "♻️  正在重启容器以恢复守护进程..."
+    echo "🔄 [4/4] 正在重启容器以应用同步配置..."
+    # 之前这里尝试手动 START SLAVE 导致 1200 错误 (因为 RESET SLAVE ALL 把 Host/User 删了)
+    # 正确做法: 直接重启容器。init-slave.sh 启动脚本会自动读取 ENV 变量并执行完整的 CHANGE MASTER TO ...
     docker restart "$CONTAINER_DB"
     
   else
@@ -100,15 +106,23 @@ fi
 
 # 5. 验证结果 (重启后需要等待一下)
 echo "⏳ 等待数据库启动..."
-sleep 10
+until docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1" > /dev/null 2>&1; do
+    echo -n "."
+    sleep 2
+done
+echo ""
 
 echo "--------------------------------------------------------"
 echo "📊 正在检查同步状态..."
+# 给 init-slave.sh 一点时间去执行 CHANGE MASTER
+sleep 5 
+
 STATUS=$(docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW SLAVE STATUS\G")
 IO_RUNNING=$(echo "$STATUS" | grep "Slave_IO_Running:" | awk '{print $2}')
 SQL_RUNNING=$(echo "$STATUS" | grep "Slave_SQL_Running:" | awk '{print $2}')
 
-if [ "$IO_RUNNING" == "Yes" ] && [ "$SQL_RUNNING" == "Yes" ]; then
+# 兼容性修复: 使用 = 而不是 ==
+if [ "$IO_RUNNING" = "Yes" ] && [ "$SQL_RUNNING" = "Yes" ]; then
   echo "🎉 完美！同步已启动并且运行正常。"
   echo "状态: IO=$IO_RUNNING / SQL=$SQL_RUNNING"
 else

@@ -21,7 +21,7 @@ echo "Checking Replication Status for: $CONTAINER_NAME"
 echo "========================================================"
 
 # Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$\"; then
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "Error: Container '$CONTAINER_NAME' is not running."
   echo "Please ensure you have started the services with 'docker-compose up -d'."
   exit 1
