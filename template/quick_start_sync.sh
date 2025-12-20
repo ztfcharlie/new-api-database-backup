@@ -1,11 +1,8 @@
 #!/bin/bash
 
 # ==============================================================================
-# 🚀 真正的一键全自动同步脚本 (Auto-Sync)
-# 功能：
-# 1. 自动检测本地是否为空库
-# 2. 如果为空，自动从主库(通过隧道)拉取全量数据 (mysqldump)
-# 3. 自动利用 Dump 包里的坐标开启主从同步
+# 🚀 真正的一键全自动同步脚本 (Auto-Sync) v2.0
+# 修复: 增加杀掉后台守护进程的逻辑，防止争抢控制权
 # ==============================================================================
 
 # 1. 检查并加载环境变量
@@ -24,7 +21,7 @@ fi
 CONTAINER_DB="backup_${PROJECT_NAME}"
 
 echo "--------------------------------------------------------"
-echo "🔄 MySQL 一键全自动同步向导"
+echo "🔄 MySQL 一键全自动同步向导 v2.0"
 echo "--------------------------------------------------------"
 echo "项目: $PROJECT_NAME"
 echo "目标库: $TARGET_DB_NAME"
@@ -48,53 +45,63 @@ DB_EXISTS=$(docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -
 
 if [[ "$DB_EXISTS" == *"$TARGET_DB_NAME"* ]]; then
   echo "⚠️  警告: 本地已经存在 '$TARGET_DB_NAME' 数据库。"
-  echo "跳过数据拉取，仅尝试修复同步连接..."
-  # 这里可以加个分支逻辑，但为了安全，先不覆盖现有数据
+  echo "跳过数据拉取，仅检查状态..."
 else
   echo "✅ 本地为空，准备开始【全量拉取 + 同步】..."
   
   # === 核心逻辑: 管道传输 ===
-  # 步骤: 停止同步 -> 清空残留 -> 管道传输(mysqldump -> mysql) -> 自动恢复
   
-  echo "🚀 [1/3] 正在从主库拉取数据并导入 (这可能需要几分钟)..."
+  # 关键修复: 先杀掉容器内的守护进程 init-slave.sh
+  # 使用 || true 防止因为找不到进程而报错退出
+  echo "🔫 [1/4] 正在暂停后台守护进程..."
+  docker exec "$CONTAINER_DB" sh -c "pkill -f init-slave.sh || killall init-slave.sh || true"
   
-  # 构造复杂的管道命令
-  # 1. 远程导出: --master-data=1 (关键! 包含同步坐标), --single-transaction (不锁表)
-  # 2. 本地导入: 先把 Auto_Position 关了，避免 GTID 冲突
+  echo "⚙️  [2/4] 正在重置本地 Slave 状态..."
+  docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "STOP SLAVE; RESET MASTER; CHANGE MASTER TO MASTER_AUTO_POSITION = 0;"
   
+  echo "🚀 [3/4] 正在传输数据 (这可能需要几分钟)..."
+  # 使用 set -o pipefail 确保管道任意一环出错都能被捕获
+  # 注意：这里我们让 mysqldump 的 stderr 重定向到 stdout 或者 /dev/null 防止密码泄露，或者保留以便调试
+  # 这里的 export PROD_PWD 是为了传递给内部的 sh
   docker exec -i "$CONTAINER_DB" sh -c "
     export MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\"
+    export PROD_PWD=\"$PROD_DB_PASSWORD\"
     
-    # 1. 先把环境清理干净
-    echo '>> 正在重置本地 Slave 状态...'
-    mysql -u root -e 'STOP SLAVE; RESET MASTER; CHANGE MASTER TO MASTER_AUTO_POSITION = 0;'
-    
-    # 2. 开始管道传输
-    echo '>> 正在传输数据...'
-    # 注意: 这里在容器内调用 mysqldump 连接 tunnel
-    export PROD_PWD=\"$
-PROD_DB_PASSWORD\"
-    mysqldump -h tunnel -u root -p"$PROD_PWD" \
+    # 开始管道传输
+    mysqldump -h tunnel -u root -p\"$PROD_PWD\" \
       --databases $TARGET_DB_NAME \
       --single-transaction \
       --master-data=1 \
       --set-gtid-purged=AUTO \
       | mysql -u root
-      
-    # 3. 启动同步
-    echo '>> 数据导入完成，正在启动同步...'
-    mysql -u root -e 'START SLAVE;'
   "
   
+  # 检查上一步的执行结果
   if [ $? -eq 0 ]; then
     echo "✅ 数据拉取及导入成功！"
+    
+    echo "🔄 [4/4] 恢复同步并重启守护进程..."
+    # 切换回 GTID 模式并启动
+    docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "CHANGE MASTER TO MASTER_AUTO_POSITION = 1; START SLAVE;"
+    
+    # 重启容器以恢复 init-slave.sh 守护进程
+    # 注意: 重启容器比较慢，也可以选择在后台重新运行脚本，但重启容器最稳
+    echo "♻️  正在重启容器以恢复守护进程..."
+    docker restart "$CONTAINER_DB"
+    
   else
-    echo "❌ 导入过程中出现错误，请检查密码或网络。"
+    echo "❌ 导入失败！请检查上方错误日志。"
+    echo "提示: 可能原因包括密码错误、网络中断或权限不足。"
+    # 即使失败也尝试重启容器恢复环境
+    docker restart "$CONTAINER_DB"
     exit 1
   fi
 fi
 
-# 5. 验证结果
+# 5. 验证结果 (重启后需要等待一下)
+echo "⏳ 等待数据库启动..."
+sleep 10
+
 echo "--------------------------------------------------------"
 echo "📊 正在检查同步状态..."
 STATUS=$(docker exec "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SHOW SLAVE STATUS\G")
