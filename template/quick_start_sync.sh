@@ -62,14 +62,34 @@ echo "🚀 准备开始【全量拉取 + 同步】..."
 
 # === 核心逻辑: 管道传输 ===
 
-# 关键修复: 使用 ps + awk 手动查找并杀掉 init-slave.sh，不依赖 pkill/killall
-# 这一步至关重要，防止 ERROR 3021
+# 关键修复: 尝试多种方式暂停后台守护进程，防止 ERROR 3021
 echo "🔫 [1/4] 正在强制暂停后台守护进程..."
-docker exec "$CONTAINER_DB" sh -c "ps -ef | grep init-slave.sh | grep -v grep | awk '{print \$1}' | xargs -r kill" || true
+docker exec "$CONTAINER_DB" sh -c "
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f init-slave.sh || true
+  elif command -v ps >/dev/null 2>&1; then
+    ps -ef | grep init-slave.sh | grep -v grep | awk '{print \$1}' | xargs -r kill || true
+  else
+    echo '⚠️  Warning: ps/pkill not found. Skipping process kill (Monitor might still be running).'
+  fi
+"
 
 echo "⚙️  [2/4] 正在重置本地 Slave 状态..."
 # 停止 Slave 并清除状态，防止 mysqldump 写入时冲突
 docker exec -i "$CONTAINER_DB" mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "STOP SLAVE; RESET SLAVE ALL; RESET MASTER;"
+
+echo "🔌 正在检查隧道连接 (Tunnel Connectivity)..."
+# 预先检查隧道通断，避免 mysqldump 直接报错
+if ! docker exec "$CONTAINER_DB" sh -c "mysqladmin --connect-timeout=3 -h tunnel -u invalid_user -pwrongpass ping 2>&1 | grep -q 'Access denied'"; then
+   echo "❌ 错误: 无法连接到远程数据库隧道 (host: tunnel:3306)。"
+   echo "可能是 SSH 隧道建立失败。请检查:"
+   echo "1. 生产服务器 IP ($SSH_HOST) 是否正确"
+   echo "2. 私钥 (id_rsa) 是否存在且权限正确"
+   echo "3. 目标端口 ($REMOTE_DB_PORT) 是否开放"
+   echo "建议运行: docker logs tunnel_${PROJECT_NAME} 查看详细日志"
+   exit 1
+fi
+echo "✅ 隧道连接正常。"
 
 echo "🚀 [3/4] 正在传输数据 (这可能需要几分钟)..."
 # 使用 set -o pipefail 确保管道任意一环出错都能被捕获

@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# ==============================================================================
+# 0. Force Bash (Fixes "source: not found" when running with 'sh')
+# ==============================================================================
+if [ -z "$BASH_VERSION" ]; then
+    echo "⚠️  Detected non-Bash shell. Switching to Bash..."
+    exec bash "$0" "$@"
+fi
+
 # Load environment variables from .env
 if [ -f .env ]; then
   # Use a safer way to export variables that handles spaces/quotes better is preferred, 
