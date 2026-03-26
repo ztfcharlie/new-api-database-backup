@@ -216,26 +216,20 @@ docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
 log_info "本地环境准备完成"
 
 # ========================================
-# 步骤7: 数据传输 (核心步骤)
+# 步骤7: 数据传输 (核心步骤) - 分两步执行更可靠
 # ========================================
 log_info "[7/8] 开始数据传输 (可能需要几分钟)..."
 
-# 创建一个临时脚本在容器内执行，避免复杂的引号转义问题
-docker exec "$CONTAINER_DB" bash -c '
-set -e
+# 步骤 7a: 导出数据到容器内的临时文件
+log_info "步骤 7a: 从 Master 导出数据..."
 
-MYSQL_PWD="'"$MYSQL_ROOT_PASSWORD"'"
+docker exec "$CONTAINER_DB" bash -c '
 PROD_PWD="'"$PROD_DB_PASSWORD"'"
 TARGET_DB="'"$TARGET_DB_NAME"'"
 
-# 导出 MYSQL_PWD
-export MYSQL_PWD
+echo "开始导出: $(date)"
 
-# 记录开始时间
-echo "开始时间: $(date)"
-
-# 执行 mysqldump
-echo "正在导出 Master 数据..."
+# 导出到临时文件
 MYSQL_PWD="$PROD_PWD" mysqldump -h tunnel -P 3306 -u root \
     --databases "$TARGET_DB" \
     --single-transaction \
@@ -245,44 +239,67 @@ MYSQL_PWD="$PROD_PWD" mysqldump -h tunnel -P 3306 -u root \
     --routines \
     --events \
     --add-drop-database \
-    2>/tmp/mysqldump_error.log | mysql -u root 2>/tmp/mysql_import_error.log
+    > /tmp/dump.sql 2>/tmp/mysqldump_error.log
 
-DUMP_STATUS=${PIPESTATUS[0]}
-IMPORT_STATUS=${PIPESTATUS[1]}
+DUMP_EXIT=$?
+echo "结束导出: $(date)"
+echo "导出退出码: $DUMP_EXIT"
 
-echo "结束时间: $(date)"
-echo "Dump 退出码: $DUMP_STATUS"
-echo "Import 退出码: $IMPORT_STATUS"
-
-if [ $DUMP_STATUS -ne 0 ]; then
+if [ $DUMP_EXIT -ne 0 ]; then
     echo "=== mysqldump 错误 ==="
-    cat /tmp/mysqldump_error.log 2>/dev/null
-    exit $DUMP_STATUS
+    cat /tmp/mysqldump_error.log
+    exit $DUMP_EXIT
 fi
 
-if [ $IMPORT_STATUS -ne 0 ]; then
-    echo "=== mysql 导入错误 ==="
-    cat /tmp/mysql_import_error.log 2>/dev/null
-    exit $IMPORT_STATUS
-fi
+# 检查文件大小
+DUMP_SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || echo "unknown")
+echo "导出文件大小: $DUMP_SIZE bytes"
 
-echo "数据传输成功"
+exit $DUMP_EXIT
 '
 
-TRANSFER_EXIT=$?
+DUMP_EXIT=$?
 
-if [ $TRANSFER_EXIT -ne 0 ]; then
-    log_error "数据传输失败 (退出码: $TRANSFER_EXIT)"
-    echo ""
-    echo "--- 完整错误日志 ---"
+if [ $DUMP_EXIT -ne 0 ]; then
+    log_error "数据导出失败"
     docker exec "$CONTAINER_DB" cat /tmp/mysqldump_error.log 2>/dev/null
+    exit 1
+fi
+
+log_info "数据导出成功"
+
+# 步骤 7b: 导入数据
+log_info "步骤 7b: 导入数据到本地..."
+
+docker exec "$CONTAINER_DB" bash -c '
+MYSQL_PWD="'"$MYSQL_ROOT_PASSWORD"'"
+export MYSQL_PWD
+
+echo "开始导入: $(date)"
+
+mysql -u root < /tmp/dump.sql 2>/tmp/mysql_import_error.log
+
+IMPORT_EXIT=$?
+echo "结束导入: $(date)"
+echo "导入退出码: $IMPORT_EXIT"
+
+if [ $IMPORT_EXIT -ne 0 ]; then
+    echo "=== mysql 导入错误 ==="
+    cat /tmp/mysql_import_error.log
+    exit $IMPORT_EXIT
+fi
+
+# 清理临时文件
+rm -f /tmp/dump.sql
+
+exit $IMPORT_EXIT
+'
+
+IMPORT_EXIT=$?
+
+if [ $IMPORT_EXIT -ne 0 ]; then
+    log_error "数据导入失败"
     docker exec "$CONTAINER_DB" cat /tmp/mysql_import_error.log 2>/dev/null
-    echo ""
-    echo "常见原因:"
-    echo "1. Master 密码错误"
-    echo "2. 网络中断"
-    echo "3. Master 负载过高"
-    echo "4. 磁盘空间不足"
     exit 1
 fi
 
