@@ -195,28 +195,10 @@ DB_EXISTS_LOCAL=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB
     mysql -u root -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
 
 if [ -n "$DB_EXISTS_LOCAL" ]; then
-    log_warn "本地已存在数据库: $TARGET_DB_NAME"
-    echo ""
-    read -p "是否删除并重新同步? (y/n): " CONFIRM
-    if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
-        log_error "用户取消操作"
-        exit 1
-    fi
-
-    log_info "删除本地数据库..."
+    log_warn "本地已存在数据库: $TARGET_DB_NAME，自动删除..."
     docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
         mysql -u root -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null || true
-
-    # 等待删除完成
     sleep 2
-
-    # 验证删除成功
-    DB_CHECK=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-        mysql -u root -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
-    if [ -n "$DB_CHECK" ]; then
-        log_error "数据库删除失败，请手动检查"
-        exit 1
-    fi
     log_info "数据库已删除"
 fi
 
