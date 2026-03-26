@@ -184,27 +184,32 @@ log_info "  停止守护进程..."
 docker exec "$CONTAINER_DB" sh -c "pkill -9 -f init-slave.sh 2>/dev/null || true" 2>/dev/null
 log_info "  守护进程已停止"
 
-# 停止 Slave
-log_info "  停止 Slave..."
+# 停止 Slave（分步停止，避免卡住）
+log_info "  停止 IO 线程..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-    mysql -u root -e "STOP SLAVE;" 2>/dev/null || true
+    mysql -u root --connect-timeout=10 -e "STOP SLAVE IO_THREAD;" 2>/dev/null || true
+
+log_info "  停止 SQL 线程..."
+docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
+    mysql -u root --connect-timeout=10 -e "STOP SLAVE SQL_THREAD;" 2>/dev/null || true
+
 log_info "  Slave 已停止"
 
 # 重置 Slave
 log_info "  重置 Slave..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-    mysql -u root -e "RESET SLAVE ALL;" 2>/dev/null || true
+    mysql -u root --connect-timeout=10 -e "RESET SLAVE ALL;" 2>/dev/null || true
 log_info "  Slave 已重置"
 
 # 检查本地是否已有数据库
 log_info "  检查本地数据库..."
 DB_EXISTS_LOCAL=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-    mysql -u root -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
+    mysql -u root --connect-timeout=10 -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
 
 if [ -n "$DB_EXISTS_LOCAL" ]; then
     log_warn "  本地已存在数据库: $TARGET_DB_NAME，自动删除..."
     docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-        mysql -u root -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null || true
+        mysql -u root --connect-timeout=10 -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null || true
     sleep 2
     log_info "  数据库已删除"
 fi
@@ -212,7 +217,7 @@ fi
 # 重置本地 GTID
 log_info "  重置本地 GTID..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-    mysql -u root -e "RESET MASTER;" 2>/dev/null || true
+    mysql -u root --connect-timeout=10 -e "RESET MASTER;" 2>/dev/null || true
 
 log_info "本地环境准备完成"
 
