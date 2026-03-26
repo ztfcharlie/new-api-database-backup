@@ -180,30 +180,37 @@ log_info "目标数据库存在: $TARGET_DB_NAME"
 log_info "[6/8] 准备本地环境..."
 
 # 停止守护进程
+log_info "  停止守护进程..."
 docker exec "$CONTAINER_DB" sh -c "pkill -9 -f init-slave.sh 2>/dev/null || true" 2>/dev/null
+log_info "  守护进程已停止"
 
 # 停止 Slave
+log_info "  停止 Slave..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -e "STOP SLAVE;" 2>/dev/null || true
+log_info "  Slave 已停止"
 
 # 重置 Slave
+log_info "  重置 Slave..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -e "RESET SLAVE ALL;" 2>/dev/null || true
+log_info "  Slave 已重置"
 
 # 检查本地是否已有数据库
+log_info "  检查本地数据库..."
 DB_EXISTS_LOCAL=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
 
 if [ -n "$DB_EXISTS_LOCAL" ]; then
-    log_warn "本地已存在数据库: $TARGET_DB_NAME，自动删除..."
+    log_warn "  本地已存在数据库: $TARGET_DB_NAME，自动删除..."
     docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
         mysql -u root -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null || true
     sleep 2
-    log_info "数据库已删除"
+    log_info "  数据库已删除"
 fi
 
 # 重置本地 GTID
-log_info "重置本地 GTID..."
+log_info "  重置本地 GTID..."
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -e "RESET MASTER;" 2>/dev/null || true
 
