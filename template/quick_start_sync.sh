@@ -205,7 +205,19 @@ if [ -n "$DB_EXISTS_LOCAL" ]; then
 
     log_info "删除本地数据库..."
     docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
-        mysql -u root -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null
+        mysql -u root -e "DROP DATABASE IF EXISTS \`$TARGET_DB_NAME\`;" 2>/dev/null || true
+
+    # 等待删除完成
+    sleep 2
+
+    # 验证删除成功
+    DB_CHECK=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
+        mysql -u root -N -e "SHOW DATABASES LIKE '$TARGET_DB_NAME';" 2>/dev/null)
+    if [ -n "$DB_CHECK" ]; then
+        log_error "数据库删除失败，请手动检查"
+        exit 1
+    fi
+    log_info "数据库已删除"
 fi
 
 # 重置本地 GTID
