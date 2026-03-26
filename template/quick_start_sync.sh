@@ -224,42 +224,73 @@ log_info "本地环境准备完成"
 # ========================================
 # 步骤7: 数据传输 (核心步骤) - 分两步执行更可靠
 # ========================================
-log_info "[7/8] 开始数据传输 (可能需要几分钟)..."
+log_info "[7/8] 开始数据传输..."
+
+# 先获取数据库大小预估
+DB_SIZE=$(docker exec -e MYSQL_PWD="$PROD_DB_PASSWORD" "$CONTAINER_DB" \
+    mysql -h tunnel -P 3306 -u root -N -e \
+    "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS size_mb FROM information_schema.tables WHERE table_schema = '$TARGET_DB_NAME';" 2>/dev/null)
+
+log_info "数据库大小约: ${DB_SIZE} MB"
+
+if [ -z "$DB_SIZE" ] || [ "$DB_SIZE" = "NULL" ]; then
+    DB_SIZE="未知"
+fi
 
 # 步骤 7a: 导出数据到容器内的临时文件
-log_info "步骤 7a: 从 Master 导出数据..."
+log_info "步骤 7a: 从 Master 导出数据 (请耐心等待)..."
 
+# 在后台执行导出，同时显示进度
 docker exec "$CONTAINER_DB" bash -c '
 PROD_PWD="'"$PROD_DB_PASSWORD"'"
 TARGET_DB="'"$TARGET_DB_NAME"'"
 
 echo "开始导出: $(date)"
 
-# 导出到临时文件
+# 导出数据，使用 pv 显示进度（如果有的话）
 MYSQL_PWD="$PROD_PWD" mysqldump -h tunnel -P 3306 -u root \
     --databases "$TARGET_DB" \
     --single-transaction \
-    --master-data=2 \
+    --quick \
+    --lock-tables=false \
+    --source-data=2 \
     --set-gtid-purged=AUTO \
     --triggers \
     --routines \
     --events \
     --add-drop-database \
-    > /tmp/dump.sql 2>/tmp/mysqldump_error.log
+    > /tmp/dump.sql 2>/tmp/mysqldump_error.log &
 
+DUMP_PID=$!
+
+# 显示进度
+while kill -0 $DUMP_PID 2>/dev/null; do
+    if [ -f /tmp/dump.sql ]; then
+        SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || echo "0")
+        SIZE_MB=$((SIZE / 1024 / 1024))
+        echo "  已导出: ${SIZE_MB} MB..."
+    fi
+    sleep 5
+done
+
+wait $DUMP_PID
 DUMP_EXIT=$?
+
 echo "结束导出: $(date)"
 echo "导出退出码: $DUMP_EXIT"
 
 if [ $DUMP_EXIT -ne 0 ]; then
     echo "=== mysqldump 错误 ==="
-    cat /tmp/mysqldump_error.log
+    cat /tmp/mysqldump_error.log 2>/dev/null
     exit $DUMP_EXIT
 fi
 
 # 检查文件大小
-DUMP_SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || echo "unknown")
-echo "导出文件大小: $DUMP_SIZE bytes"
+if [ -f /tmp/dump.sql ]; then
+    DUMP_SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || echo "0")
+    DUMP_SIZE_MB=$((DUMP_SIZE / 1024 / 1024))
+    echo "导出完成，文件大小: ${DUMP_SIZE_MB} MB"
+fi
 
 exit $DUMP_EXIT
 '
@@ -275,7 +306,7 @@ fi
 log_info "数据导出成功"
 
 # 步骤 7b: 导入数据
-log_info "步骤 7b: 导入数据到本地..."
+log_info "步骤 7b: 导入数据到本地 (请耐心等待)..."
 
 docker exec "$CONTAINER_DB" bash -c '
 MYSQL_PWD="'"$MYSQL_ROOT_PASSWORD"'"
@@ -283,21 +314,33 @@ export MYSQL_PWD
 
 echo "开始导入: $(date)"
 
-mysql -u root < /tmp/dump.sql 2>/tmp/mysql_import_error.log
+# 导入数据
+mysql -u root < /tmp/dump.sql 2>/tmp/mysql_import_error.log &
 
+IMPORT_PID=$!
+
+# 显示进度
+while kill -0 $IMPORT_PID 2>/dev/null; do
+    echo "  正在导入..."
+    sleep 5
+done
+
+wait $IMPORT_PID
 IMPORT_EXIT=$?
+
 echo "结束导入: $(date)"
 echo "导入退出码: $IMPORT_EXIT"
 
 if [ $IMPORT_EXIT -ne 0 ]; then
     echo "=== mysql 导入错误 ==="
-    cat /tmp/mysql_import_error.log
+    cat /tmp/mysql_import_error.log 2>/dev/null
     exit $IMPORT_EXIT
 fi
 
 # 清理临时文件
 rm -f /tmp/dump.sql
 
+echo "导入完成"
 exit $IMPORT_EXIT
 '
 
