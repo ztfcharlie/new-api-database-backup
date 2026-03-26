@@ -1,0 +1,67 @@
+version: '3.4'
+
+services:
+  burncloud-aiapi:
+    image: calciumion/new-api-horizon:latest
+    container_name: burncloud-aiapi
+    restart: always
+    command: --log-dir /app/logs
+    ports:
+      - ${PORT}:3000
+    volumes:
+      - ./logs:/app/logs
+      - ./public/static:/data/public/static
+      - ./public/uploads:/data/public/uploads
+    environment:
+      - SQL_DSN=${SQL_DSN}
+      - GLOBAL_API_RATE_LIMIT_ENABLE=false
+      - GLOBAL_API_RATE_LIMIT=300
+      - GLOBAL_API_RATE_LIMIT_DURATION=60
+      - GLOBAL_WEB_RATE_LIMIT_ENABLE=false
+      - GLOBAL_WEB_RATE_LIMIT=300
+      - GLOBAL_WEB_RATE_LIMIT_DURATION=60
+      - GENERATE_DEFAULT_TOKEN=${GENERATE_DEFAULT_TOKEN}
+      - REDIS_CONN_STRING=${REDIS_CONN_STRING}
+      - ERROR_LOG_ENABLED=true # 是否启用错误日志记录
+      - NODE_TYPE=${NODE_TYPE}
+      - TZ=America/New_York
+    depends_on:
+      burncloud-aiapi-redis:
+        condition: service_started
+      burncloud-aiapi-mysql:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:3000/api/status > /dev/null" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  burncloud-aiapi-redis:
+    image: redis:latest
+    container_name: burncloud-aiapi-redis
+    restart: always
+    volumes:
+      - ./redis_data:/data
+
+  burncloud-aiapi-mysql:
+    image: mysql:8.2
+    container_name: burncloud-aiapi-mysql
+    restart: always
+    command:
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: burncloud123456!qwf
+      MYSQL_DATABASE: new-api
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${MYSQL_PORT}:3306"

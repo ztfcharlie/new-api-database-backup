@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-actions">
+    <a href="/deploy" class="btn btn-primary">部署新应用</a>
+    <a href="/import" class="btn btn-secondary">导入已有节点</a>
+</div>
+
+<div class="table-container">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>应用名称</th>
+                <th>应用机</th>
+                <th>应用端口</th>
+                <th>MySQL端口</th>
+                <th>备份目录</th>
+                <th>PMA端口</th>
+                <th>应用状态</th>
+                <th>备份状态</th>
+                <th>已安装</th>
+                <th>邮件通知</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for app in apps %}
+            <tr>
+                <td><strong>{{ app.app_name }}</strong></td>
+                <td>
+                    {{ app.server_name or '-' }}
+                    <br><small class="text-muted">{{ app.server_ip or '-' }}</small>
+                </td>
+                <td>{{ app.app_port }}</td>
+                <td>{{ app.mysql_port }}</td>
+                <td><code>{{ app.backup_dir }}</code></td>
+                <td>{{ app.pma_port }}</td>
+                <td>
+                    {% if app.status == 'running' %}
+                        <span class="badge badge-success">运行中</span>
+                    {% elif app.status == 'deploying' %}
+                        <span class="badge badge-warning">部署中</span>
+                    {% elif app.status == 'error' %}
+                        <span class="badge badge-error">错误</span>
+                    {% else %}
+                        <span class="badge badge-secondary">{{ app.status }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if app.backup_status == 'ok' %}
+                        <span class="badge badge-success">正常</span>
+                    {% elif app.backup_status == 'syncing' %}
+                        <span class="badge badge-warning">同步中</span>
+                    {% elif app.backup_status == 'error' %}
+                        <span class="badge badge-error">异常</span>
+                    {% else %}
+                        <span class="badge badge-secondary">{{ app.backup_status }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if app.install_confirmed %}
+                        <span class="text-success">是</span>
+                    {% else %}
+                        <span class="text-warning">否</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if app.email_notification_enabled %}
+                        <button class="btn-icon text-success" onclick="toggleNotification({{ app.id }}, true)" title="已开启">
+                            ✓
+                        </button>
+                    {% else %}
+                        <button class="btn-icon text-muted" onclick="toggleNotification({{ app.id }}, false)" title="已关闭">
+                            ✗
+                        </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if not apps %}
+<div class="empty-state">
+    <h3>暂无应用</h3>
+    <p>点击上方「部署新应用」开始部署</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h2>导入已有节点</h2>
+    <p>将已经存在的备份节点纳入控制台管理。</p>
+</div>
+
+{% if servers %}
+<div class="card">
+    <form id="importForm" method="POST" action="/api/apps/import">
+        <div class="form-group">
+            <label for="server_id">应用机 <span class="required">*</span></label>
+            <select name="server_id" id="server_id" required>
+                <option value="">请选择应用机</option>
+                {% for server in servers %}
+                <option value="{{ server.id }}">{{ server.name }} ({{ server.ip }})</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="backup_dir">备份目录名 <span class="required">*</span></label>
+            <select name="backup_dir" id="backup_dir" required>
+                <option value="">请选择备份目录</option>
+                {% for dir in backup_dirs %}
+                <option value="{{ dir }}">{{ dir }}</option>
+                {% endfor %}
+            </select>
+            <small class="form-hint">备份机上的目录名称</small>
+        </div>
+
+        <div class="form-group">
+            <label for="app_name">应用名称 <span class="required">*</span></label>
+            <input type="text" name="app_name" id="app_name" required placeholder="例如：new-api-test">
+        </div>
+
+        <div class="form-group">
+            <label for="app_port">应用端口 <span class="required">*</span></label>
+            <input type="number" name="app_port" id="app_port" required min="1024" max="65535" placeholder="例如：8080">
+        </div>
+
+        <div class="form-group">
+            <label for="mysql_port">MySQL端口 <span class="required">*</span></label>
+            <input type="number" name="mysql_port" id="mysql_port" required min="1024" max="65535" placeholder="例如：53306">
+        </div>
+
+        <div class="form-group">
+            <label for="pma_port">phpMyAdmin端口 <span class="required">*</span></label>
+            <input type="number" name="pma_port" id="pma_port" required min="1024" max="65535" placeholder="例如：8900">
+            <small class="form-hint">从备份目录的.env文件中读取</small>
+        </div>
+
+        <div class="form-actions">
+            <a href="/" class="btn btn-secondary">取消</a>
+            <button type="submit" class="btn btn-primary">导入</button>
+        </div>
+    </form>
+</div>
+
+<div class="info-box">
+    <strong>导入说明：</strong>
+    <ul>
+        <li>选择备份机上的已有备份目录</li>
+        <li>填写对应的应用信息</li>
+        <li>导入后可以在控制台查看备份状态</li>
+        <li>不会执行任何部署操作，只是纳入管理</li>
+    </ul>
+</div>
+
+{% else %}
+<div class="empty-state">
+    <h3>请先添加应用机</h3>
+    <p>导入节点需要先添加对应的应用机</p>
+    <a href="/servers" class="btn btn-primary">去添加应用机</a>
+</div>
+{% endif %}
+
+<script>
+    const backupDirSelect = document.getElementById('backup_dir');
+    const pmaPortInput = document.getElementById('pma_port');
+
+    // 根据备份目录名自动解析一些信息
+    backupDirSelect.addEventListener('change', async function() {
+        const backupDir = this.value;
+
+        // 尝试从目录名解析IP和端口
+        // 格式可能是: 74.249.9.79-8080 或 74-249-9-79-8080
+        if (backupDir) {
+            // 可以添加逻辑来从目录名自动填充app_port
+            const parts = backupDir.split('-');
+            if (parts.length > 0) {
+                const possiblePort = parts[parts.length - 1];
+                if (/^\d{4,5}$/.test(possiblePort)) {
+                    document.getElementById('app_port').value = possiblePort;
+                }
+            }
+        }
+    });
+
+    document.getElementById('importForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const formData = new FormData(e.target);
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = '导入中...';
+
+        try {
+            const response = await fetch('/api/apps/import', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+
+            if (data.code === 0) {
+                showMessage(data.message, 'success');
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 1500);
+            } else {
+                showMessage(data.message, 'error');
+                submitBtn.disabled = false;
+                submitBtn.textContent = '导入';
+            }
+        } catch (error) {
+            showMessage('网络错误', 'error');
+            submitBtn.disabled = false;
+            submitBtn.textContent = '导入';
+        }
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-actions">
+    <button class="btn btn-primary" onclick="showAddServerModal()">添加应用机</button>
+</div>
+
+<div class="table-container">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>备注名称</th>
+                <th>IP地址</th>
+                <th>SSH端口</th>
+                <th>SSH用户</th>
+                <th>应用数量</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for server in servers %}
+            <tr>
+                <td><strong>{{ server.name }}</strong></td>
+                <td>{{ server.ip }}</td>
+                <td>{{ server.ssh_port }}</td>
+                <td>{{ server.ssh_user }}</td>
+                <td>{{ server.app_count or 0 }}</td>
+                <td>
+                    <button onclick="testConnection({{ server.id }})" class="btn-small">测试连接</button>
+                    <button onclick="editServer({{ server.id }})" class="btn-small">编辑</button>
+                    {% if server.app_count == 0 %}
+                    <button onclick="deleteServer({{ server.id }})" class="btn-small btn-danger">删除</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if not servers %}
+<div class="empty-state">
+    <h3>暂无应用机</h3>
+    <p>添加应用机后可以部署new-api应用</p>
+</div>
+{% endif %}
+
+<!-- 添加/编辑应用机弹窗 -->
+<div id="serverModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modalTitle">添加应用机</h3>
+            <span class="close" onclick="closeModal()">&times;</span>
+        </div>
+        <form id="serverForm" method="POST" action="">
+            <input type="hidden" name="server_id" id="server_id" value="">
+            <div class="form-group">
+                <label>备注名称</label>
+                <input type="text" name="name" id="server_name" required placeholder="例如：生产机A">
+            </div>
+            <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" name="ip" id="server_ip" required placeholder="例如：1.2.3.4">
+            </div>
+            <div class="form-group">
+                <label>SSH端口</label>
+                <input type="number" name="ssh_port" id="server_ssh_port" value="22">
+            </div>
+            <div class="form-group">
+                <label>SSH用户</label>
+                <input type="text" name="ssh_user" id="server_ssh_user" value="core">
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="closeModal()" class="btn btn-secondary">取消</button>
+                <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function showAddServerModal() {
+        document.getElementById('modalTitle').textContent = '添加应用机';
+        document.getElementById('serverForm').action = '/api/servers';
+        document.getElementById('server_id').value = '';
+        document.getElementById('server_name').value = '';
+        document.getElementById('server_ip').value = '';
+        document.getElementById('server_ssh_port').value = '22';
+        document.getElementById('server_ssh_user').value = 'core';
+        document.getElementById('serverModal').style.display = 'block';
+    }
+
+    function editServer(serverId) {
+        const row = document.querySelector(`tr:has(button[onclick*="${serverId}"][onclick*="edit"])`);
+        if (row) {
+            document.getElementById('modalTitle').textContent = '编辑应用机';
+            document.getElementById('serverForm').action = `/api/servers/${serverId}/update`;
+            document.getElementById('server_id').value = serverId;
+            document.getElementById('server_name').value = row.cells[0].textContent.trim();
+            document.getElementById('server_ip').value = row.cells[1].textContent.trim();
+            document.getElementById('server_ssh_port').value = row.cells[2].textContent.trim();
+            document.getElementById('server_ssh_user').value = row.cells[3].textContent.trim();
+            document.getElementById('serverModal').style.display = 'block';
+        }
+    }
+
+    function deleteServer(serverId) {
+        confirmAction('确定要删除此应用机吗？', async () => {
+            const response = await fetch(`/api/servers/${serverId}/delete`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+            if (data.code === 0) {
+                showMessage(data.message, 'success');
+                location.reload();
+            } else {
+                showMessage(data.message, 'error');
+            }
+        });
+    }
+
+    async function testConnection(serverId) {
+        const row = document.querySelector(`tr:has(button[onclick*="${serverId}"][onclick*="test"])`);
+        if (row) {
+            const ip = row.cells[1].textContent.trim();
+            const sshPort = row.cells[2].textContent.trim();
+            const sshUser = row.cells[3].textContent.trim();
+
+            showMessage('正在测试连接...', 'info');
+
+            const formData = new FormData();
+            formData.append('ip', ip);
+            formData.append('ssh_port', sshPort);
+            formData.append('ssh_user', sshUser);
+
+            const response = await fetch('/api/servers/test', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showMessage(`连接成功！远程用户: ${data.details.remote_user}`, 'success');
+            } else {
+                showMessage(data.message, 'error');
+            }
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('serverModal').style.display = 'none';
+    }
+
+    document.getElementById('serverForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+
+        const action = e.target.action;
+        const response = await fetch(action, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.code === 0) {
+            showMessage(data.message, 'success');
+            closeModal();
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showMessage(data.message, 'error');
+        }
+    });
+
+    // 点击模态框外部关闭
+    window.onclick = function(event) {
+        const modal = document.getElementById('serverModal');
+        if (event.target == modal) {
+            closeModal();
+        }
+    }
+</script>
+{% endblock %}

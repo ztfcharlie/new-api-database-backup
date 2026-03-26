@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New-API 部署控制台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>New-API 部署控制台</h1>
+            <nav>
+                <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">首页</a>
+                <a href="/servers" class="{% if 'servers' in request.url.path %}active{% endif %}">应用机管理</a>
+                <a href="/apps" class="{% if 'apps' in request.url.path %}active{% endif %}">应用管理</a>
+                <a href="/deploy" class="{% if 'deploy' in request.url.path %}active{% endif %}">部署新应用</a>
+                <a href="/import" class="{% if 'import' in request.url.path %}active{% endif %}">导入已有节点</a>
+                <a href="/alerts" class="{% if 'alerts' in request.url.path %}active{% endif %}">告警历史</a>
+            </nav>
+        </header>
+
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+
+        <footer>
+            <p>New-API 部署控制台 v1.0 | 自动备份管理系统</p>
+        </footer>
+    </div>
+
+    <script>
+        // 显示提示消息
+        function showMessage(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // 确认对话框
+        function confirmAction(message, callback) {
+            if (confirm(message)) {
+                callback();
+            }
+        }
+
+        // 刷新状态
+        async function refreshStatus(appId) {
+            const statusDiv = document.getElementById(`status-${appId}`);
+            if (statusDiv) {
+                statusDiv.innerHTML = '<span class="loading">刷新中...</span>';
+            }
+
+            try {
+                const response = await fetch(`/api/apps/${appId}/status`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (data.code === 0) {
+                    location.reload();
+                } else {
+                    showMessage(data.message, 'error');
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<span class="error">刷新失败</span>';
+                    }
+                }
+            } catch (error) {
+                showMessage('网络错误', 'error');
+                if (statusDiv) {
+                    statusDiv.innerHTML = '<span class="error">刷新失败</span>';
+                }
+            }
+        }
+
+        // 确认安装
+        async function confirmInstall(appId) {
+            confirmAction('确认应用已完成安装？这将启动备份数据同步。', async () => {
+                try {
+                    const response = await fetch(`/api/apps/${appId}/confirm`, {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+
+                    if (data.code === 0) {
+                        showMessage(data.message, 'success');
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, 'error');
+                    }
+                } catch (error) {
+                    showMessage('网络错误', 'error');
+                }
+            });
+        }
+
+        // 重启同步
+        async function restartSync(appId) {
+            confirmAction('确认要重启同步吗？', async () => {
+                try {
+                    const response = await fetch(`/api/apps/${appId}/restart-sync`, {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+
+                    if (data.code === 0) {
+                        showMessage(data.message, 'success');
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, 'error');
+                    }
+                } catch (error) {
+                    showMessage('网络错误', 'error');
+                }
+            });
+        }
+
+        // 切换通知开关
+        async function toggleNotification(appId, currentState) {
+            try {
+                const response = await fetch(`/api/apps/${appId}/toggle-notification`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (data.code === 0) {
+                    showMessage(data.message, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showMessage(data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('网络错误', 'error');
+            }
+        }
+    </script>
+</body>
+</html>

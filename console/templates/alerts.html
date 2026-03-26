@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-actions">
+    <button onclick="sendTestEmail()" class="btn btn-secondary">发送测试邮件</button>
+    <button onclick="location.reload()" class="btn btn-secondary">刷新</button>
+</div>
+
+<div class="page-header">
+    <h2>告警历史</h2>
+    <p>查看所有备份异常告警记录。</p>
+</div>
+
+{% if alerts %}
+<div class="table-container">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>时间</th>
+                <th>应用</th>
+                <th>应用机</th>
+                <th>告警类型</th>
+                <th>消息</th>
+                <th>已发送</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for alert in alerts %}
+            <tr>
+                <td><small>{{ alert.created_at }}</small></td>
+                <td>{{ alert.app_name or '-' }}</td>
+                <td>{{ alert.server_name or '-' }}</td>
+                <td>
+                    {% if alert.alert_type == 'io_error' %}
+                        <span class="badge badge-error">IO错误</span>
+                    {% elif alert.alert_type == 'sql_error' %}
+                        <span class="badge badge-error">SQL错误</span>
+                    {% elif alert.alert_type == 'delay' %}
+                        <span class="badge badge-warning">延迟</span>
+                    {% else %}
+                        <span class="badge badge-secondary">{{ alert.alert_type }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ alert.message or '-' }}</td>
+                <td>
+                    {% if alert.is_sent %}
+                        <span class="text-success">是</span>
+                    {% else %}
+                        <span class="text-muted">否</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <h3>暂无告警记录</h3>
+    <p>当备份出现异常时会记录在这里</p>
+</div>
+{% endif %}
+
+<script>
+    async function sendTestEmail() {
+        confirmAction('确定要发送测试邮件吗？', async () => {
+            showMessage('正在发送测试邮件...', 'info');
+
+            try {
+                const response = await fetch('/api/alerts/test-email', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (data.code === 0) {
+                    showMessage(data.message, 'success');
+                } else {
+                    showMessage(data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('网络错误', 'error');
+            }
+        });
+    }
+</script>
+{% endblock %}

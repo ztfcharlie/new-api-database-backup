@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  deploy-console:
+    build: .
+    container_name: burncloud-deploy-console
+    restart: always
+    ports:
+      - "127.0.0.1:8980:8980"
+    volumes:
+      # 挂载SSH密钥（用于连接应用机）
+      - ../id_rsa/id_rsa_backup:/root/.ssh/id_rsa_backup:ro
+      # 挂载备份目录（用于创建和管理备份）
+      - ..:/data/burncloud/burncloud-aiapi-database-backup:ro
+      # 数据持久化
+      - ./data:/app/data
+    environment:
+      - TZ=America/New_York
+    network_mode: host  # 使用host网络模式以便执行docker命令

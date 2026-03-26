@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h2>部署新应用</h2>
+    <p>填写以下信息部署新的new-api应用到应用机，并创建对应的备份配置。</p>
+</div>
+
+{% if servers %}
+<div class="card">
+    <form id="deployForm" method="POST" action="/api/apps">
+        <div class="form-group">
+            <label for="server_id">应用机 <span class="required">*</span></label>
+            <select name="server_id" id="server_id" required>
+                <option value="">请选择应用机</option>
+                {% for server in servers %}
+                <option value="{{ server.id }}">{{ server.name }} ({{ server.ip }})</option>
+                {% endfor %}
+            </select>
+            <small class="form-hint">如果没有应用机，请先去应用机管理添加</small>
+        </div>
+
+        <div class="form-group">
+            <label for="app_name">应用名称 <span class="required">*</span></label>
+            <input type="text" name="app_name" id="app_name" required placeholder="例如：new-api-test">
+            <small class="form-hint">用于标识应用，将作为容器名的一部分</small>
+        </div>
+
+        <div class="form-group">
+            <label for="app_port">应用端口 <span class="required">*</span></label>
+            <input type="number" name="app_port" id="app_port" required min="1024" max="65535" placeholder="例如：8080">
+            <small class="form-hint">new-api服务对外提供的端口</small>
+        </div>
+
+        <div class="form-group">
+            <label for="mysql_port">MySQL端口 <span class="required">*</span></label>
+            <input type="number" name="mysql_port" id="mysql_port" required min="1024" max="65535" placeholder="例如：53306">
+            <small class="form-hint">应用机上MySQL映射到宿主机的端口（用于SSH隧道同步）</small>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="auto_deploy" value="true" checked>
+                自动部署到应用机
+            </label>
+            <small class="form-hint">取消勾选则只创建备份配置，不自动部署</small>
+        </div>
+
+        <div class="form-actions">
+            <a href="/" class="btn btn-secondary">取消</a>
+            <button type="submit" class="btn btn-primary">开始部署</button>
+        </div>
+    </form>
+</div>
+
+<div class="info-box">
+    <strong>部署说明：</strong>
+    <ol>
+        <li>系统会在备份机创建对应的备份目录和配置</li>
+        <li>系统会通过SSH连接到应用机，创建应用目录并上传配置文件</li>
+        <li>系统会启动应用机上的Docker容器</li>
+        <li>部署完成后，请在应用机完成new-api的初始化配置</li>
+        <li>点击首页的「确认安装」按钮，系统将启动备份容器并开始同步数据</li>
+    </ol>
+</div>
+
+{% else %}
+<div class="empty-state">
+    <h3>请先添加应用机</h3>
+    <p>部署应用需要先添加应用机</p>
+    <a href="/servers" class="btn btn-primary">去添加应用机</a>
+</div>
+{% endif %}
+
+<script>
+    document.getElementById('deployForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const formData = new FormData(e.target);
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = '部署中...';
+
+        try {
+            const response = await fetch('/api/apps', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+
+            if (data.code === 0) {
+                showMessage(data.message, 'success');
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
+            } else {
+                showMessage(data.message, 'error');
+                submitBtn.disabled = false;
+                submitBtn.textContent = '开始部署';
+            }
+        } catch (error) {
+            showMessage('网络错误', 'error');
+            submitBtn.disabled = false;
+            submitBtn.textContent = '开始部署';
+        }
+    });
+
+    // 自动填充端口（如果应用机只有一个）
+    const serverSelect = document.getElementById('server_id');
+    const appPortInput = document.getElementById('app_port');
+    const mysqlPortInput = document.getElementById('mysql_port');
+
+    serverSelect.addEventListener('change', function() {
+        // 可以根据选择的应用机自动填充一些默认值
+        // 这里只是示例，实际可能需要从后端获取
+    });
+</script>
+{% endblock %}
