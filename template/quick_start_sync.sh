@@ -61,6 +61,15 @@ echo "容器:      $CONTAINER_DB"
 echo "Server ID: $SERVER_ID"
 echo "========================================================"
 echo ""
+echo "⚠️  警告: 此操作将删除本地数据库并从 Master 全量重新同步！"
+echo "         如果已有正常同步的数据，请使用 Ctrl+C 取消。"
+echo ""
+read -p "确定要执行全量同步吗? (输入 yes 继续): " CONFIRM
+if [ "$CONFIRM" != "yes" ]; then
+    echo "已取消操作"
+    exit 0
+fi
+echo ""
 
 # ========================================
 # 步骤1: 检查容器状态
