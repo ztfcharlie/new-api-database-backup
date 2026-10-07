@@ -80,6 +80,7 @@ services:
       MASTER_PASSWORD: ${MASTER_PASSWORD}
       TARGET_DB_NAME: ${TARGET_DB_NAME}
     volumes:
+      - ./dump-cache:/var/lib/mysql-sync
       - ./data:/var/lib/mysql
       - ./init-slave.sh:/scripts/init-slave.sh:ro
     deploy:

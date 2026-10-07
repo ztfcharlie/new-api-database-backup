@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ==============================================================================
-# MySQL 一键全自动同步脚本 v8.0
-# 基于 v7.3 修改：
-#   1. 【关键】步骤5开头创建 /var/run/sync.lock，暂停 init-slave.sh 守护进程
-#   2. 【关键】pkill 换成 /proc 遍历 + kill（mysql:8.0 镜像无 pkill）
-#   3. 【关键】restart_monitor 路径改为 /scripts/init-slave.sh
-#   4. 导入前/后双重校验 gtid_executed，防止 3546
-#   5. 全流程使用 MySQL 8.0.22+ 新语法（REPLICA/SOURCE）
-#   6. 步骤7完成后删除 sync.lock，恢复守护进程
+# MySQL 一键全自动同步脚本 v8.1
+# 基于 v8.0 修改：
+#   1. 【新增】--fresh-dump 强制重新导出
+#   2. 【新增】--force-clean 删本地库 + 删缓存 dump
+#   3. 【新增】dump 缓存复用：/var/lib/mysql-sync/dump.sql 存在则跳过导出
+#   4. 【修改】dump 路径从 /tmp 改为 /var/lib/mysql-sync/（持久化）
+#   5. 【修改】导入后不再删除 dump，供下次复用
+#   6. 【新增】导出时写 .tmp 再 mv，避免半截文件被误用
 # ==============================================================================
 
 if [ -z "$BASH_VERSION" ]; then
@@ -24,6 +24,27 @@ NC='\033[0m'
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# ========================================
+# 参数解析
+# ========================================
+FRESH_DUMP=false
+FORCE_CLEAN=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --fresh-dump)
+            FRESH_DUMP=true
+            ;;
+        --force-clean)
+            FORCE_CLEAN=true
+            FRESH_DUMP=true   # force-clean 隐含 fresh-dump
+            ;;
+        *)
+            log_warn "未知参数: $arg（已忽略）"
+            ;;
+    esac
+done
 
 if [ ! -f .env ]; then
     log_error ".env 文件不存在"
@@ -42,7 +63,11 @@ MASTER_USER="${MASTER_USER:-root}"
 CONTAINER_DB="db_${PROJECT_NAME}"
 CONTAINER_TUNNEL="tunnel_${PROJECT_NAME}"
 
-# 强制 GTID_PURGED_MODE=ON
+# dump 持久化路径（容器内，需在 docker-compose.yml 挂载到宿主机 ./dump-cache）
+DUMP_DIR="/var/lib/mysql-sync"
+DUMP_FILE="${DUMP_DIR}/dump.sql"
+DUMP_META="${DUMP_DIR}/dump.gtid"
+
 GTID_PURGED_MODE="${GTID_PURGED_MODE:-ON}"
 if [ "$GTID_PURGED_MODE" != "ON" ]; then
     log_warn "GTID_PURGED_MODE=$GTID_PURGED_MODE，本脚本要求 ON，已强制为 ON"
@@ -51,12 +76,14 @@ fi
 
 echo ""
 echo "========================================================"
-echo "    MySQL 一键全自动同步 v8.0"
+echo "    MySQL 一键全自动同步 v8.1"
 echo "========================================================"
 echo "项目:      $PROJECT_NAME"
 echo "目标库:    $TARGET_DB_NAME"
 echo "容器:      $CONTAINER_DB"
 echo "GTID模式:  $GTID_PURGED_MODE"
+echo "dump路径:  $DUMP_FILE"
+echo "参数:      --fresh-dump=$FRESH_DUMP  --force-clean=$FORCE_CLEAN"
 echo "========================================================"
 
 # ========================================
@@ -97,7 +124,6 @@ wait_replica_stopped() {
     return 1
 }
 
-# 用 /proc 遍历 + kill（容器无 pkill）
 stop_init_slave() {
     docker exec "$CONTAINER_DB" sh -c '
         for pid in /proc/[0-9]*; do
@@ -122,7 +148,6 @@ check_init_slave_running() {
     ' 2>/dev/null || echo "0"
 }
 
-# 修正后的 restart_monitor（路径 /scripts/init-slave.sh）
 restart_monitor() {
     log_info "重新启动 Slave 监控守护进程..."
     docker exec "$CONTAINER_DB" sh -c "rm -f /var/run/slave_init.done 2>/dev/null || true"
@@ -151,6 +176,16 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_TUNNEL}$"; then
     log_warn "隧道容器未运行，尝试启动..."
     docker start "$CONTAINER_TUNNEL" 2>/dev/null || true
     sleep 3
+fi
+
+# >>> 新增：确认 dump 持久化目录已挂载
+if ! docker exec "$CONTAINER_DB" sh -c "test -d '$DUMP_DIR'" 2>/dev/null; then
+    log_warn "  $DUMP_DIR 不存在，尝试创建..."
+    docker exec "$CONTAINER_DB" sh -c "mkdir -p '$DUMP_DIR'" 2>/dev/null || true
+    if ! docker exec "$CONTAINER_DB" sh -c "test -d '$DUMP_DIR'" 2>/dev/null; then
+        log_error "  无法创建 $DUMP_DIR，请检查 docker-compose.yml 是否挂载了 ./dump-cache:/var/lib/mysql-sync"
+        exit 1
+    fi
 fi
 
 log_info "容器状态正常"
@@ -229,11 +264,9 @@ wait_mysql_ready 30 || exit 1
 log_info "  创建同步锁（暂停守护进程）..."
 docker exec "$CONTAINER_DB" touch /var/run/sync.lock
 
-# 等待守护进程响应（它每 10 秒检查一次锁）
 log_info "  等待守护进程暂停..."
 sleep 12
 
-# 确认守护进程已暂停（看日志）
 MONITOR_TAIL=$(docker exec "$CONTAINER_DB" tail -5 /var/log/slave_monitor.log 2>/dev/null || echo "")
 if echo "$MONITOR_TAIL" | grep -q "检测到同步锁\|暂停监控"; then
     log_info "  守护进程已暂停"
@@ -242,7 +275,6 @@ else
     echo "$MONITOR_TAIL" | tail -3
 fi
 
-# 强制杀掉可能残留的 init-slave 进程（双保险）
 log_info "  清理残留守护进程..."
 stop_init_slave
 sleep 2
@@ -268,9 +300,14 @@ if ! wait_replica_stopped 30; then
 fi
 log_info "  复制已停止"
 
-# 重置复制通道
 docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -e "RESET REPLICA ALL FOR CHANNEL '';" 2>&1 | grep -v "^mysql:" || true
+
+# >>> --force-clean：额外清理缓存的 dump
+if [ "$FORCE_CLEAN" = true ]; then
+    log_warn "  --force-clean：清理缓存的 dump 文件..."
+    docker exec "$CONTAINER_DB" sh -c "rm -f '$DUMP_FILE' '$DUMP_FILE.tmp' '$DUMP_META'" 2>/dev/null || true
+fi
 
 # 删除本地数据库
 log_info "  检查本地数据库..."
@@ -303,7 +340,6 @@ if [ "$RESET_SUCCESS" = false ]; then
     exit 1
 fi
 
-# 确认 gtid_executed 已清空
 CLEANED_GTID=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -N -e "SELECT @@GLOBAL.gtid_executed;" 2>/dev/null)
 log_info "  当前本地 gtid_executed: ${CLEANED_GTID:-空}"
@@ -325,71 +361,107 @@ DB_SIZE=$(docker exec -e MYSQL_PWD="$MASTER_PASSWORD" "$CONTAINER_DB" \
     "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) FROM information_schema.tables WHERE table_schema = '$TARGET_DB_NAME';" 2>/dev/null)
 log_info "数据库大小约: ${DB_SIZE:-未知} MB"
 
-# 步骤 6a: 导出
-log_info "步骤 6a: 从 Master 导出数据..."
-
-docker exec "$CONTAINER_DB" bash -c '
-PROD_PWD="'"$MASTER_PASSWORD"'"
-TARGET_DB="'"$TARGET_DB_NAME"'"
-GTID_MODE="'"$GTID_PURGED_MODE"'"
-
-echo "开始导出: $(date)"
-echo "GTID_PURGED 模式: $GTID_MODE"
-
-MYSQL_PWD="$PROD_PWD" mysqldump -h tunnel -P 3306 -u root \
-    --databases "$TARGET_DB" \
-    --single-transaction \
-    --quick \
-    --lock-tables=false \
-    --source-data=2 \
-    --set-gtid-purged="$GTID_MODE" \
-    --triggers \
-    --routines \
-    --events \
-    --add-drop-database \
-    > /tmp/dump.sql 2>/tmp/dump_error.log &
-
-DUMP_PID=$!
-
-while kill -0 $DUMP_PID 2>/dev/null; do
-    if [ -f /tmp/dump.sql ]; then
-        SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || stat -f%z /tmp/dump.sql 2>/dev/null || echo "0")
-        SIZE_MB=$((SIZE / 1024 / 1024))
-        echo "  已导出: ${SIZE_MB} MB..."
-    fi
-    sleep 5
-done
-
-wait $DUMP_PID
-DUMP_EXIT=$?
-
-echo "结束导出: $(date)"
-echo "导出退出码: $DUMP_EXIT"
-
-if [ $DUMP_EXIT -ne 0 ]; then
-    echo "=== mysqldump 错误 ==="
-    cat /tmp/dump_error.log 2>/dev/null
-    exit $DUMP_EXIT
+# ----------------------------------------
+# 步骤 6a: 导出（可复用缓存）
+# ----------------------------------------
+DUMP_EXISTS=false
+if docker exec "$CONTAINER_DB" sh -c "test -s '$DUMP_FILE'" 2>/dev/null; then
+    DUMP_EXISTS=true
 fi
 
-if [ -f /tmp/dump.sql ]; then
-    DUMP_SIZE=$(stat -c%s /tmp/dump.sql 2>/dev/null || stat -f%z /tmp/dump.sql 2>/dev/null || echo "0")
+NEED_DUMP=false
+if [ "$FRESH_DUMP" = true ]; then
+    log_info "步骤 6a: --fresh-dump 已指定，强制重新导出..."
+    NEED_DUMP=true
+elif [ "$DUMP_EXISTS" = true ]; then
+    CACHED_SIZE_MB=$(docker exec "$CONTAINER_DB" sh -c "stat -c%s '$DUMP_FILE' 2>/dev/null || echo 0" | awk '{print int($1/1024/1024)}')
+    CACHED_TIME=$(docker exec "$CONTAINER_DB" sh -c "stat -c%y '$DUMP_FILE' 2>/dev/null || echo 未知")
+    log_warn "步骤 6a: 发现缓存的 dump 文件，跳过导出"
+    log_warn "  大小: ${CACHED_SIZE_MB} MB"
+    log_warn "  时间: $CACHED_TIME"
+    log_warn "  如需重新导出，请加参数: --fresh-dump"
+    NEED_DUMP=false
+else
+    log_info "步骤 6a: 未发现可用 dump，开始导出..."
+    NEED_DUMP=true
+fi
+
+if [ "$NEED_DUMP" = true ]; then
+    docker exec "$CONTAINER_DB" bash -c '
+    PROD_PWD="'"$MASTER_PASSWORD"'"
+    TARGET_DB="'"$TARGET_DB_NAME"'"
+    GTID_MODE="'"$GTID_PURGED_MODE"'"
+    DUMP_FILE="'"$DUMP_FILE"'"
+
+    echo "开始导出: $(date)"
+    echo "GTID_PURGED 模式: $GTID_MODE"
+
+    mkdir -p "$(dirname "$DUMP_FILE")"
+
+    # 先写 .tmp，导出成功后再 mv，避免半截文件被下次误用
+    MYSQL_PWD="$PROD_PWD" mysqldump -h tunnel -P 3306 -u root \
+        --databases "$TARGET_DB" \
+        --single-transaction \
+        --quick \
+        --lock-tables=false \
+        --source-data=2 \
+        --set-gtid-purged="$GTID_MODE" \
+        --triggers \
+        --routines \
+        --events \
+        --add-drop-database \
+        > "$DUMP_FILE.tmp" 2>/tmp/dump_error.log &
+
+    DUMP_PID=$!
+
+    while kill -0 $DUMP_PID 2>/dev/null; do
+        if [ -f "$DUMP_FILE.tmp" ]; then
+            SIZE=$(stat -c%s "$DUMP_FILE.tmp" 2>/dev/null || echo "0")
+            SIZE_MB=$((SIZE / 1024 / 1024))
+            echo "  已导出: ${SIZE_MB} MB..."
+        fi
+        sleep 5
+    done
+
+    wait $DUMP_PID
+    DUMP_EXIT=$?
+
+    echo "结束导出: $(date)"
+    echo "导出退出码: $DUMP_EXIT"
+
+    if [ $DUMP_EXIT -ne 0 ]; then
+        echo "=== mysqldump 错误 ==="
+        cat /tmp/dump_error.log 2>/dev/null
+        rm -f "$DUMP_FILE.tmp"
+        exit $DUMP_EXIT
+    fi
+
+    # 原子替换
+    mv "$DUMP_FILE.tmp" "$DUMP_FILE"
+
+    DUMP_SIZE=$(stat -c%s "$DUMP_FILE" 2>/dev/null || echo "0")
     DUMP_SIZE_MB=$((DUMP_SIZE / 1024 / 1024))
     echo "导出完成，大小: ${DUMP_SIZE_MB} MB"
+    '
+
+    DUMP_EXIT=$?
+    if [ $DUMP_EXIT -ne 0 ]; then
+        log_error "数据导出失败"
+        exit 1
+    fi
+
+    log_info "数据导出成功"
+
+    # 记录导出时刻 Master 的 GTID，供下次判断
+    MASTER_GTID_NOW=$(docker exec -e MYSQL_PWD="$MASTER_PASSWORD" "$CONTAINER_DB" \
+        mysql -h tunnel -P 3306 -u root -N -e "SELECT @@GLOBAL.gtid_executed;" 2>/dev/null)
+    docker exec "$CONTAINER_DB" sh -c "echo '$MASTER_GTID_NOW' > '$DUMP_META'" 2>/dev/null || true
+    log_info "  dump 对应的 Master GTID 起点已记录到 $DUMP_META"
+else
+    log_info "步骤 6a: 复用缓存 dump"
 fi
 
-exit $DUMP_EXIT
-'
-
-DUMP_EXIT=$?
-if [ $DUMP_EXIT -ne 0 ]; then
-    log_error "数据导出失败"
-    exit 1
-fi
-
-log_info "数据导出成功"
-
-GTID_LINE=$(docker exec "$CONTAINER_DB" sh -c "grep -m1 'GTID_PURGED' /tmp/dump.sql 2>/dev/null" || true)
+GTID_LINE=$(docker exec "$CONTAINER_DB" sh -c "grep -m1 'GTID_PURGED' '$DUMP_FILE' 2>/dev/null" || true)
 if [ -n "$GTID_LINE" ]; then
     log_info "  dump 中包含 GTID 起点信息"
     echo "  $GTID_LINE" | head -c 200
@@ -408,16 +480,19 @@ if [ -n "$GTID_BEFORE_IMPORT" ]; then
 fi
 log_info "  导入前 gtid_executed 确认为空"
 
-# 步骤 6b: 导入
+# ----------------------------------------
+# 步骤 6b: 导入（不删除 dump）
+# ----------------------------------------
 log_info "步骤 6b: 导入数据到本地..."
 
 docker exec "$CONTAINER_DB" bash -c '
 LOCAL_PWD="'"$MYSQL_ROOT_PASSWORD"'"
+DUMP_FILE="'"$DUMP_FILE"'"
 export MYSQL_PWD="$LOCAL_PWD"
 
 echo "开始导入: $(date)"
 
-mysql -u root < /tmp/dump.sql 2>/tmp/import_error.log &
+mysql -u root < "$DUMP_FILE" 2>/tmp/import_error.log &
 
 IMPORT_PID=$!
 
@@ -438,8 +513,8 @@ if [ $IMPORT_EXIT -ne 0 ]; then
     exit $IMPORT_EXIT
 fi
 
-rm -f /tmp/dump.sql
-echo "导入完成"
+# 保留 dump 文件，供下次复用
+echo "导入完成（dump 文件已保留：$DUMP_FILE）"
 exit $IMPORT_EXIT
 '
 
@@ -451,7 +526,6 @@ fi
 
 log_info "数据传输成功"
 
-# 导入后验证 gtid_executed 非空（说明 GTID 起点已对齐）
 IMPORTED_GTID=$(docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$CONTAINER_DB" \
     mysql -u root -N -e "SELECT @@GLOBAL.gtid_executed;" 2>/dev/null)
 log_info "导入后本地 gtid_executed: ${IMPORTED_GTID:-空}"
@@ -478,11 +552,9 @@ fi
 
 log_info "复制配置完成"
 
-# >>> 【关键】删除同步锁，恢复守护进程
 log_info "  删除同步锁，恢复守护进程..."
 docker exec "$CONTAINER_DB" rm -f /var/run/sync.lock
 
-# 等守护进程重新接管（它每 10 秒检查一次锁）
 sleep 3
 
 # ========================================
@@ -502,7 +574,6 @@ LAST_IO_ERROR=$(echo "$STATUS" | grep "Last_IO_Error:" | sed 's/.*Last_IO_Error:
 LAST_SQL_ERRNO=$(echo "$STATUS" | grep "Last_SQL_Errno:" | awk '{print $2}' | tr -d '\r')
 LAST_SQL_ERROR=$(echo "$STATUS" | grep "Last_SQL_Error:" | sed 's/.*Last_SQL_Error: //' | tr -d '\r')
 
-# 兼容旧字段
 if [ -z "$IO_RUNNING" ]; then
     IO_RUNNING=$(echo "$STATUS" | grep "Slave_IO_Running:" | awk '{print $2}' | tr -d '\r')
 fi
@@ -555,3 +626,4 @@ else
     echo "  1062 - 主键冲突"
     exit 1
 fi
+
